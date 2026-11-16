@@ -1,0 +1,17 @@
+# Generated data, telemetry and trained models
+data/
+*.evtx
+*.parquet
+*.pkl
+*.joblib
+*.pt
+
+# Malware samples (never commit)
+scenarios/real_samples/samples/
+*.locked
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
