@@ -8,8 +8,9 @@ A run directory is produced by lab.py and contains:
     - one exported Sysmon .evtx file
     - meta.json: {run_id, scenario, label, kind, seed_guid, start_utc, end_utc, ...}
 
-Sysmon event IDs used: 1 (ProcessCreate), 3 (NetworkConnect), 7 (ImageLoad),
-8 (CreateRemoteThread), 10 (ProcessAccess), 11 (FileCreate), 13 (RegistryValueSet).
+Sysmon event IDs used: 1 (ProcessCreate), 3 (NetworkConnect), 5 (ProcessTerminate), 7 (ImageLoad),
+8 (CreateRemoteThread), 10 (ProcessAccess), 11 (FileCreate), 12/13 (Registry),
+22 (DNSQuery), 23/26 (FileDelete).
 
 CLI:
     python collector.py                 # process every run under data/raw
@@ -34,7 +35,7 @@ SCHEMA = [
     "signed", "signature_status", "image_loaded",
     "dest_ip", "dest_port", "protocol",
     "target_guid", "granted_access",
-    "target_filename", "reg_target", "reg_details",
+    "target_filename", "reg_target", "reg_details", "dns_query",
     "label",
 ]
 
@@ -138,6 +139,7 @@ def normalize_record(raw: Dict[str, object], run_id: str,
             process_guid=d.get("SourceProcessGuid"), image=d.get("SourceImage"),
             target_guid=d.get("TargetProcessGuid"),
             granted_access=d.get("GrantedAccess"),
+            target_filename=d.get("TargetImage"),   # target process image
         )
     elif eid == 11:  # FileCreate
         row.update(
@@ -149,6 +151,20 @@ def normalize_record(raw: Dict[str, object], run_id: str,
             process_guid=d.get("ProcessGuid"), image=d.get("Image"),
             reg_target=d.get("TargetObject"), reg_details=d.get("Details"),
         )
+    elif eid == 12:  # RegistryObject create/delete
+        row.update(
+            process_guid=d.get("ProcessGuid"), image=d.get("Image"),
+            reg_target=d.get("TargetObject"), reg_details=d.get("EventType"),
+        )
+    elif eid == 5:  # ProcessTerminate (process lifetime)
+        row.update(process_guid=d.get("ProcessGuid"), pid=d.get("ProcessId"),
+                   image=d.get("Image"))
+    elif eid == 22:  # DNSQuery
+        row.update(process_guid=d.get("ProcessGuid"), pid=d.get("ProcessId"),
+                   image=d.get("Image"), dns_query=d.get("QueryName"))
+    elif eid in (23, 26):  # FileDelete (archived) / FileDeleteDetected
+        row.update(process_guid=d.get("ProcessGuid"), image=d.get("Image"),
+                   target_filename=d.get("TargetFilename"))
     else:
         return None
     return row
@@ -159,11 +175,16 @@ def normalize_record(raw: Dict[str, object], run_id: str,
 # --------------------------------------------------------------------------- #
 def malicious_guids(events: List[Dict[str, object]], seed_guid: str) -> set:
     """Return the seed process guid and all of its descendants, using the
-    parent links recorded in ProcessCreate (event id 1) events."""
+    parent links recorded in ProcessCreate (event id 1) events. Processes that
+    a malicious process injected into (CreateRemoteThread, event id 8) are
+    added as well, together with their own descendants."""
     children: Dict[str, List[str]] = {}
+    injected: Dict[str, List[str]] = {}
     for e in events:
         if e["event_id"] == 1 and e["parent_guid"] and e["process_guid"]:
             children.setdefault(e["parent_guid"], []).append(e["process_guid"])
+        elif e["event_id"] == 8 and e["process_guid"] and e["target_guid"]:
+            injected.setdefault(e["process_guid"], []).append(e["target_guid"])
 
     seen = set()
     stack = [seed_guid]
@@ -173,6 +194,7 @@ def malicious_guids(events: List[Dict[str, object]], seed_guid: str) -> set:
             continue
         seen.add(g)
         stack.extend(children.get(g, []))
+        stack.extend(injected.get(g, []))
     return seen
 
 
@@ -212,21 +234,51 @@ def load_run(run_dir: Path) -> List[Dict[str, object]]:
     return events
 
 
-def build_events(config: dict) -> pd.DataFrame:
+def _parse_run_cached(args) -> tuple:
+    """Parse one run into data/parsed/<run_id>.parquet (reused while the run's
+    evtx and meta.json are unchanged). Runs in a worker process."""
+    rd, cache_dir = Path(args[0]), Path(args[1])
+    cache = cache_dir / f"{rd.name}.parquet"
+    try:
+        src_mtime = max(p.stat().st_mtime for p in [rd / "meta.json", *rd.glob("*.evtx")])
+    except (ValueError, FileNotFoundError):
+        return rd.name, None, "no meta.json or .evtx"
+    if cache.exists() and cache.stat().st_mtime >= src_mtime:
+        return rd.name, str(cache), "cached"
+    try:
+        events = load_run(rd)
+    except FileNotFoundError as exc:
+        return rd.name, None, str(exc)
+    frame = pd.DataFrame(events, columns=SCHEMA)
+    for col in ("pid", "ppid", "dest_port"):
+        frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    frame = frame.astype({c: "string" for c in SCHEMA
+                          if c not in ("event_id", "pid", "ppid", "dest_port", "label")})
+    frame.to_parquet(cache, index=False)
+    return rd.name, str(cache), f"{len(events)} events"
+
+
+def build_events(config: dict, workers: int = 0) -> pd.DataFrame:
+    import os
+    from concurrent.futures import ProcessPoolExecutor
+
     raw_root = Path(config["paths"]["raw"])
     run_dirs = [p for p in sorted(raw_root.glob("*")) if p.is_dir()]
     if not run_dirs:
         raise RuntimeError(f"no run directories under {raw_root}")
+    cache_dir = Path(config["paths"]["data_root"]) / "parsed"
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     frames = []
-    for rd in run_dirs:
-        try:
-            events = load_run(rd)
-        except FileNotFoundError as exc:
-            print(f"[skip] {rd.name}: {exc}")
-            continue
-        frames.append(pd.DataFrame(events, columns=SCHEMA))
-        print(f"[ok]   {rd.name}: {len(events)} events")
+    workers = workers or max((os.cpu_count() or 2) - 2, 1)
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        for name, path, msg in ex.map(_parse_run_cached,
+                                      [(str(rd), str(cache_dir)) for rd in run_dirs]):
+            if path is None:
+                print(f"[skip] {name}: {msg}")
+                continue
+            frames.append(pd.read_parquet(path))
+            print(f"[ok]   {name}: {msg}")
 
     if not frames:
         raise RuntimeError("no runs could be parsed (missing meta.json or .evtx)")
