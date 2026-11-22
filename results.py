@@ -173,6 +173,7 @@ def fig_scores(pred: pd.DataFrame, rep: dict, fdir: Path):
         ax.set_yscale("log")
         ax.set(title=f"Score distribution – {STAGE_NAME[st]}", xlabel="Score", ylabel="Processes (log)")
         ax.legend(fontsize=8)
+    axes[1].tick_params(labelleft=True)
     save(fig, fdir / "score_distributions.png")
 
 
@@ -249,13 +250,14 @@ def fig_ttd(rdir: Path, fdir: Path, tdir: Path):
         if not len(t):
             continue
         frac = np.arange(1, len(t) + 1) / len(g)
-        ax.step(np.r_[0, t], np.r_[0, frac], where="post", color=SERIES[i],
-                label=f"{TTD_NAME.get(kind, kind)} ({len(t)}/{len(g)} runs)")
+        ax.step(np.r_[9.0, t, 11.0], np.r_[0, frac, frac[-1]], where="post", color=SERIES[i],
+                lw=2.4 - 0.4 * i, label=f"{TTD_NAME.get(kind, kind)} ({len(t)}/{len(g)} runs)")
     ax.axvline(10, color=TEXT2, lw=1, ls="--")
-    ax.text(9.8, 0.5, "shortest window (10 s):\nearliest possible detection", ha="right", fontsize=8, color=TEXT2)
+    ax.text(9.95, 0.5, "shortest window (10 s):\nearliest possible detection", ha="right", fontsize=8, color=TEXT2)
     ax.set(xlabel="Seconds from scenario start", ylabel="Share of malicious runs detected",
-           title="Time to detection (Stage 1, per-window models)", ylim=(0, 1.02))
-    ax.legend(fontsize=8, loc="upper left")
+           title="Time to detection (Stage 1, per-window models)", ylim=(0, 1.05), xlim=(9.0, 11.0))
+    ax.set_xticks(np.arange(9.0, 11.01, 0.25))
+    ax.legend(fontsize=8, loc="lower right")
     save(fig, fdir / "time_to_detection.png")
 
 
