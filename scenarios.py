@@ -240,11 +240,34 @@ def miner_like(duration_s: int, cfg: dict) -> None:
 # ===========================================================================
 def run_atomic(duration_s: int, cfg: dict, technique: str) -> None:
     """Invoke Atomic Red Team for a technique id. Requires Invoke-AtomicRedTeam
-    to be installed in the guest (see docs/lab_setup)."""
+    to be installed in the guest (see docs/lab_setup). The whole technique is
+    bounded by duration_s; each test by a share of it."""
     if not IS_WINDOWS:
         print("atomic launcher requires the Windows guest"); return
-    _spawn(["powershell", "-NoProfile", "-Command",
-            f"Invoke-AtomicTest {technique} -TimeoutSeconds {duration_s}"])
+    per_test = max(duration_s // 4, 10)
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                        f"Invoke-AtomicTest {technique} -TimeoutSeconds {per_test}"],
+                       timeout=duration_s + 30, capture_output=True)
+    except Exception as exc:
+        print(f"atomic run ended: {exc}")
+
+
+def extract_sample(archive: str, name: str, password: str) -> str:
+    """Extract a MalwareBazaar AES ZIP inside the guest to the user's Downloads
+    folder under its original file name (realistic launch location)."""
+    import pyzipper                                   # installed in the guest only
+    dest_dir = Path(os.environ.get("USERPROFILE", "C:\\Users\\Public")) / "Downloads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    with pyzipper.AESZipFile(archive) as zf:
+        zf.setpassword(password.encode())
+        member = zf.namelist()[0]
+        data = zf.read(member)
+    stem = Path(name).stem if name else Path(member).stem
+    dest = dest_dir / f"{stem}.exe"
+    dest.write_bytes(data)
+    os.remove(archive)
+    return str(dest)
 
 
 def run_sample(duration_s: int, cfg: dict, sample_path: str | None) -> None:
@@ -256,6 +279,7 @@ def run_sample(duration_s: int, cfg: dict, sample_path: str | None) -> None:
     try:
         p = subprocess.Popen([sample_path])
         time.sleep(duration_s)
+        print(f"[sample] exit code after {duration_s}s: {p.poll()}")
         p.terminate()
     except Exception as exc:
         print(f"sample run failed: {exc}")
@@ -289,15 +313,29 @@ def dispatch(args, cfg: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run one guest scenario.")
-    ap.add_argument("--scenario", required=True)
+    ap.add_argument("--scenario")
     ap.add_argument("--duration", type=int, default=30)
     ap.add_argument("--tag", required=True, help="unique run id (seed resolution)")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--technique", help="ATT&CK id for atomic launcher")
     ap.add_argument("--sample", help="path to a sample for sample_run")
+    ap.add_argument("--job", help="JSON job file with the arguments above (used by "
+                                  "lab.py so the launcher command line carries no "
+                                  "scenario name)")
     args = ap.parse_args()
 
+    if args.job:
+        import json
+        job = json.loads(Path(args.job).read_text(encoding="utf-8"))
+        args.scenario = job["scenario"]
+        args.duration = int(job.get("duration", args.duration))
+        args.technique = job.get("technique") or args.technique
+        args.config = job.get("config", args.config)
+        os.remove(args.job)
     cfg = load_config(args.config)
+    if args.job and job.get("sample_archive"):
+        args.sample = extract_sample(job["sample_archive"], job.get("sample_name", ""),
+                                     cfg["samples"]["zip_password"])
     print(f"[scenario] {args.scenario} tag={args.tag} pid={os.getpid()}")
     dispatch(args, cfg)
     print(f"[scenario] {args.scenario} done")
