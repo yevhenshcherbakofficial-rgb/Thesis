@@ -44,25 +44,30 @@ def raw_ts(raw: dict) -> Optional[str]:
 
 
 class ReplayReader:
-    """Yield all events from an exported evtx once, in time order."""
-    def __init__(self, evtx_path: str):
+    """Replay an exported evtx in time order, `step_s` seconds of telemetry per
+    poll (simulated real time), so alerts carry a realistic detection time."""
+    def __init__(self, evtx_path: str, step_s: int = 5):
         self.path = Path(evtx_path)
-        self._done = False
+        rows = [r for r in (normalize_record(raw, "live", "", "") for raw in parse_evtx(self.path)) if r]
+        rows.sort(key=lambda r: r["ts"] or "")
+        self.rows = rows
+        self.t0 = pd.to_datetime(rows[0]["ts"], utc=True) if rows else None
+        self.step = pd.Timedelta(seconds=step_s)
+        self.clock = self.t0
+        self.i = 0
 
     def new_events(self) -> List[dict]:
-        if self._done:
+        if self.i >= len(self.rows):
             return []
-        self._done = True
-        rows = []
-        for raw in parse_evtx(self.path):
-            row = normalize_record(raw, "live", "", "")
-            if row:
-                rows.append(row)
-        return rows
+        self.clock = self.clock + self.step
+        out = []
+        while self.i < len(self.rows) and pd.to_datetime(self.rows[self.i]["ts"], utc=True) <= self.clock:
+            out.append(self.rows[self.i]); self.i += 1
+        return out
 
     @property
     def active(self) -> bool:
-        return not self._done
+        return self.i < len(self.rows)
 
 
 class LivePollingReader:
@@ -99,64 +104,63 @@ class LivePollingReader:
 class Pipeline:
     def __init__(self, config: dict):
         import joblib
-        mdir = Path(config["paths"]["models"])
+        mdir = Path(config["paths"]["models"]) / config.get("_feature_set", "no_tree_context")
+        import json
         bundle = joblib.load(mdir / "gbm.joblib")
         self.gbm = bundle["model"]
         self.feat_cols = bundle["feat_cols"]
-        self.iforest = joblib.load(mdir / "iforest.joblib")
+        self.iforest = joblib.load(mdir / "iforest.joblib")     # {model, lo, hi}
         self.fusion = config["models"]["fusion"]
+        thr_path = mdir / "thresholds.json"
+        self.thresholds = json.loads(thr_path.read_text()) if thr_path.exists() else {}
+        self.alert_threshold = float(self.thresholds.get("fused", self.fusion["alert_threshold"]))
         self.window_s = int(config["models"]["feature_window_s"])
+        self.seq_len = int(config["features"]["sequence_max_len"])
         self.autorun = config["features"]["autorun_registry_keys"]
-        self._importance = getattr(self.gbm, "feature_importances_", None)
+        self.res_index: dict = {}
+        self._explainer = None
         self.lstm, self.device = self._load_lstm(config, mdir)
 
     def _load_lstm(self, config, mdir):
         try:
             import torch
-            from torch import nn
+            from models import make_lstm
         except ImportError:
             return None, None
-        p = config["models"]["lstm"]
-
-        class LSTMClassifier(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.emb = nn.Embedding(F.VOCAB_SIZE, p["embedding_dim"], padding_idx=0)
-                self.lstm = nn.LSTM(p["embedding_dim"], p["hidden_dim"],
-                                    num_layers=p["num_layers"], batch_first=True,
-                                    dropout=p["dropout"] if p["num_layers"] > 1 else 0.0)
-                self.head = nn.Sequential(nn.Dropout(p["dropout"]),
-                                          nn.Linear(p["hidden_dim"], 1))
-
-            def forward(self, x):
-                lengths = (x != 0).sum(dim=1).clamp(min=1)
-                out, _ = self.lstm(self.emb(x))
-                idx = (lengths - 1).view(-1, 1, 1).expand(-1, 1, out.size(2))
-                return self.head(out.gather(1, idx).squeeze(1)).squeeze(1)
-
         path = mdir / "lstm.pt"
         if not path.exists():
             return None, None
-        model = LSTMClassifier()
+        model = make_lstm(F.VOCAB_SIZE, config["models"]["lstm"])
         model.load_state_dict(torch.load(path, map_location="cpu"))
         model.eval()
         return model, "cpu"
 
+    def load_resources(self, csv_path: Path) -> None:
+        """Replay only: resource samples recorded next to the evtx."""
+        if csv_path.exists():
+            r = pd.read_csv(csv_path)
+            r["run_id"] = "live"
+            r["ts_utc"] = pd.to_datetime(r["ts_utc"], utc=True, errors="coerce", format="ISO8601")
+            r["start_utc"] = pd.to_datetime(r["start_utc"], utc=True, errors="coerce", format="ISO8601")
+            self.res_index = F.resource_index(r.dropna(subset=["ts_utc", "start_utc"]))
+
     # -- scoring -----------------------------------------------------------
     def score(self, buf: pd.DataFrame) -> pd.DataFrame:
         """Score every process in the buffer; returns feats + score columns."""
+        from models import fuse, iforest_scores, tree_aggregate
+        buf = buf[buf["process_guid"].notna()]
         proc = F.process_table(buf)
-        feats = F.window_features(buf, proc, self.window_s, self.autorun)
+        feats = F.window_features(buf, proc, self.window_s, self.autorun, self.res_index)
         if feats.empty:
             return feats
         X = feats[self.feat_cols].fillna(0).to_numpy(dtype=np.float32)
         gbm_p = self.gbm.predict_proba(X)[:, 1]
-        anomaly = self._anomaly(X)
+        anomaly = iforest_scores(self.iforest, X)
 
         lstm_p = np.zeros(len(feats))
         if self.lstm is not None:
             import torch
-            ids, Xseq, _ = F.build_sequences(buf, 200)
+            ids, Xseq, _ = F.build_sequences(buf, self.seq_len, window_s=self.window_s)
             pos = {rg: i for i, rg in enumerate(ids)}
             rows = [pos.get((r, g)) for r, g in zip(feats["run_id"], feats["process_guid"])]
             have = [i for i, j in enumerate(rows) if j is not None]
@@ -167,28 +171,23 @@ class Pipeline:
                 for k, i in enumerate(have):
                     lstm_p[i] = probs[k]
 
-        suspect = gbm_p >= self.fusion["stage1_suspect_threshold"]
-        final = gbm_p.copy()
-        final[suspect] = np.maximum(gbm_p[suspect], lstm_p[suspect])
-        final = np.clip(np.maximum(final, 0.3 * anomaly), 0, 1)
-
+        final = tree_aggregate(feats, fuse(gbm_p, lstm_p, anomaly, self.fusion))
         feats = feats.copy()
         feats["gbm"], feats["lstm"], feats["anomaly"], feats["score"] = \
             gbm_p, lstm_p, anomaly, final
         return feats
 
-    def _anomaly(self, X) -> np.ndarray:
-        raw = -self.iforest.score_samples(X)
-        lo, hi = raw.min(), raw.max()
-        return (raw - lo) / (hi - lo + 1e-9)
-
     def top_features(self, feats_row: pd.Series, k: int = 5) -> List[str]:
-        if self._importance is None:
-            return []
-        vals = feats_row[self.feat_cols].to_numpy(dtype=float)
-        contrib = np.abs(vals) * self._importance
+        """Per-alert explanation: the k features with the largest positive
+        SHAP contribution to this process's stage-1 score."""
+        import shap
+        if self._explainer is None:
+            self._explainer = shap.TreeExplainer(self.gbm)
+        x = feats_row[self.feat_cols].to_numpy(dtype=np.float32).reshape(1, -1)
+        contrib = self._explainer.shap_values(x)[0]
         order = np.argsort(contrib)[::-1][:k]
-        return [f"{self.feat_cols[i]}={feats_row[self.feat_cols[i]]}" for i in order]
+        return [f"{self.feat_cols[i]}={feats_row[self.feat_cols[i]]:g} ({contrib[i]:+.2f})"
+                for i in order if contrib[i] > 0]
 
 
 # --------------------------------------------------------------------------- #
@@ -238,13 +237,18 @@ def respond(action: str, pid: Optional[int]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-def run(config: dict, reader, response_action: str, poll_s: int) -> None:
+def run(config: dict, reader, response_action: str, poll_s: int,
+        alerts_out: Optional[str] = None) -> List[dict]:
+    import json
     pipe = Pipeline(config)
+    if isinstance(reader, ReplayReader):
+        pipe.load_resources(reader.path.parent / "resources.csv")
     buf = pd.DataFrame(columns=SCHEMA)
     alerted: set = set()
-    alert_thr = config["models"]["fusion"]["alert_threshold"]
+    alert_thr = pipe.alert_threshold
+    log: List[dict] = []
 
-    print(f"[detect] started; response={response_action}")
+    print(f"[detect] started; response={response_action}; threshold={alert_thr:.4f}")
     while reader.active:
         rows = reader.new_events()
         if rows:
@@ -252,23 +256,45 @@ def run(config: dict, reader, response_action: str, poll_s: int) -> None:
             new["ts"] = pd.to_datetime(new["ts"], utc=True, errors="coerce")
             new["label"] = 0
             buf = pd.concat([buf, new], ignore_index=True).dropna(subset=["ts"])
+            buf["event_id"] = pd.to_numeric(buf["event_id"], errors="coerce")
 
             feats = pipe.score(buf)
+            images = dict(zip(buf.loc[buf["event_id"] == 1, "process_guid"],
+                              buf.loc[buf["event_id"] == 1, "image"]))
+            # Decide only on complete observation windows (as in training):
+            # the process is at least window_s old or has already exited.
+            now = reader.clock if isinstance(reader, ReplayReader) else pd.Timestamp.now(tz="UTC")
+            final = not reader.active
             for _, r in feats.iterrows():
                 if r["process_guid"] in alerted or r["score"] < alert_thr:
                     continue
+                complete = ((now - r["start_ts"]).total_seconds() >= pipe.window_s
+                            or r.get("terminated_in_window", 0) == 1 or final)
+                if not complete:
+                    continue
                 alerted.add(r["process_guid"])
-                a = Alert(r["process_guid"], F.basename(r.get("scenario") or ""),
+                a = Alert(r["process_guid"], F.basename(images.get(r["process_guid"], "")),
                           float(r["score"]), pipe.top_features(r),
                           event_chain(buf, r["process_guid"]))
-                print(f"\n[ALERT] score={a.score:.3f} chain={' -> '.join(a.chain)}")
+                rec = {"process_guid": a.guid, "image": a.image, "score": round(a.score, 4),
+                       "gbm": round(float(r["gbm"]), 4), "lstm": round(float(r["lstm"]), 4),
+                       "anomaly": round(float(r["anomaly"]), 4),
+                       "chain": a.chain, "top_features": a.top_features}
+                if isinstance(reader, ReplayReader):
+                    rec["replay_time_s"] = round((reader.clock - reader.t0).total_seconds(), 1)
+                    rec["process_age_s"] = round((reader.clock - r["start_ts"]).total_seconds(), 1)
+                log.append(rec)
+                print(f"\n[ALERT] score={a.score:.3f} image={a.image} chain={' -> '.join(a.chain)}"
+                      + (f" t+{rec['replay_time_s']}s" if "replay_time_s" in rec else ""))
                 print(f"        features: {', '.join(a.top_features)}")
                 respond(response_action, pid_of(buf, r["process_guid"]))
 
-        if isinstance(reader, ReplayReader):
-            break
-        time.sleep(poll_s)
-    print("[detect] stopped")
+        if not isinstance(reader, ReplayReader):
+            time.sleep(poll_s)
+    if alerts_out:
+        Path(alerts_out).write_text("\n".join(json.dumps(x) for x in log) + "\n", encoding="utf-8")
+    print(f"[detect] stopped; {len(log)} alerts")
+    return log
 
 
 def main() -> None:
@@ -278,15 +304,18 @@ def main() -> None:
     ap.add_argument("--response", default="notify",
                     choices=["notify", "suspend", "terminate"])
     ap.add_argument("--poll", type=int, default=5)
+    ap.add_argument("--alerts-out", help="write alerts as JSON lines to this file")
+    ap.add_argument("--feature-set", default="no_tree_context", help="trained model set to load")
     args = ap.parse_args()
 
     config = load_config(args.config)
+    config["_feature_set"] = args.feature_set
     if args.replay:
-        reader = ReplayReader(args.replay)
+        reader = ReplayReader(args.replay, step_s=args.poll)
     else:
         channel = "Microsoft-Windows-Sysmon/Operational"
         reader = LivePollingReader(channel, args.poll)
-    run(config, reader, args.response, args.poll)
+    run(config, reader, args.response, args.poll, args.alerts_out)
 
 
 if __name__ == "__main__":
