@@ -25,13 +25,13 @@ SOURCE_NAME = {"simulator": "Behavioural simulators", "atomic": "Atomic Red Team
                "sample_unseen_family": "Real samples (unseen families)"}
 
 FEATURE_GROUPS = {
-    "Static attributes": ["image_is_lolbin", "image_is_shell"],
+    "Static attributes": ["image_is_lolbin", "image_is_shell", "n_img_load", "n_unsigned_load"],
     "Launch context": ["cmdline_len", "cmdline_entropy", "cmdline_n_args", "parent_is_shell",
                        "parent_is_office", "parent_is_lolbin", "integrity_rank", "depth"],
-    "Resource metrics": ["cpu_max_pct", "cpu_mean_pct", "cpu_total_s", "ws_max_mb", "ws_growth_mb",
-                         "private_max_mb", "threads_max", "threads_growth", "handles_max",
-                         "res_samples", "n_events", "event_rate", "n_img_load", "n_unsigned_load",
-                         "terminated_in_window", "lifetime_in_window_s"],
+    "Resource metrics and activity intensity": ["cpu_max_pct", "cpu_mean_pct", "cpu_total_s", "ws_max_mb",
+                                                "ws_growth_mb", "private_max_mb", "threads_max",
+                                                "threads_growth", "handles_max", "res_samples", "n_events",
+                                                "event_rate", "terminated_in_window", "lifetime_in_window_s"],
     "File and registry activity": ["n_file_create", "n_exec_file_create", "n_unique_file_ext",
                                    "n_file_delete", "n_autorun_writes", "n_reg_set", "n_reg_key_op"],
     "Network activity": ["n_net", "n_unique_ip", "n_unique_port", "n_dns", "n_unique_domain"],
@@ -138,28 +138,36 @@ def fig_roc_pr(pred: pd.DataFrame, rep: dict, fdir: Path):
     y = te["label"].to_numpy()
     if len(set(y)) < 2:
         return
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
+    plt.rcParams.update({"font.size": 13, "axes.titlesize": 13})
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5.2))
     for i, st in enumerate(STAGE_ORDER):
+        m = rep["overall_test"][st]
         fpr, tpr, _ = roc_curve(y, te[st])
-        axes[0].plot(fpr, tpr, color=SERIES[i],
-                     label=f"{STAGE_NAME[st]} (AUC {rep['overall_test'][st]['roc_auc']:.3f})")
+        ls = ["-", "--", "-.", "-"][i]
+        lw = 3.2 if st == "fused" else 2.0
+        axes[0].plot(fpr, tpr, color=SERIES[i], ls=ls, lw=lw,
+                     label=f"{STAGE_NAME[st]} (ROC-AUC {m['roc_auc']:.3f}, AP {m['pr_auc']:.3f})")
         p, r, _ = precision_recall_curve(y, te[st])
-        axes[1].plot(r, p, color=SERIES[i],
-                     label=f"{STAGE_NAME[st]} (AP {rep['overall_test'][st]['pr_auc']:.3f})")
+        axes[1].plot(r, p, color=SERIES[i], ls=ls, lw=lw)
     axes[0].set_xscale("log"); axes[0].set_xlim(1e-4, 1)
     axes[0].axvline(rep["target_fpr"], color=TEXT2, lw=1, ls="--")
-    axes[0].text(rep["target_fpr"], 0.02, f" target FPR {rep['target_fpr']:g}", color=TEXT2, fontsize=8)
-    axes[0].set(title="ROC curve (test set, log FPR)", xlabel="False positive rate", ylabel="True positive rate")
-    axes[1].set(title="Precision-recall curve (test set)", xlabel="Recall", ylabel="Precision")
+    axes[0].text(rep["target_fpr"] * 1.15, 0.5, f"target FPR\n{rep['target_fpr']:g}", color=TEXT2, fontsize=11)
+    axes[0].set(title="ROC curve (log FPR)", xlabel="False positive rate", ylabel="True positive rate")
+    axes[1].set(title="Precision-recall curve", xlabel="Recall", ylabel="Precision")
     for ax in axes:
-        ax.set_ylim(0, 1.02); ax.legend(loc="lower right", fontsize=8)
-    save(fig, fdir / "roc_pr_curves.png")
+        ax.set_ylim(0, 1.02)
+    fig.legend(*axes[0].get_legend_handles_labels(), loc="lower center", ncol=2, fontsize=11,
+               bbox_to_anchor=(0.5, 0.0))
+    fig.tight_layout(rect=(0, 0.16, 1, 1))
+    fig.savefig(fdir / "roc_pr_curves.png", dpi=200)
+    plt.close(fig)
 
 
 def fig_scores(pred: pd.DataFrame, rep: dict, fdir: Path):
     plt = plt_setup()
+    plt.rcParams.update({"font.size": 13, "axes.titlesize": 13})
     te = pred[pred["split"] == "test"]
-    fig, axes = plt.subplots(1, 2, figsize=(10, 3.8), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.4), sharey=True)
     for ax, st in zip(axes, ("gbm", "fused")):
         bins = np.linspace(0, 1, 41)
         ax.hist(te.loc[te.label == 0, st], bins=bins, color=SERIES[0], alpha=0.85, label="Benign processes",
@@ -168,11 +176,11 @@ def fig_scores(pred: pd.DataFrame, rep: dict, fdir: Path):
                 edgecolor=SURFACE, linewidth=0.5)
         thr = rep["thresholds_from_validation"][st]
         ax.axvline(thr, color=TEXT, lw=1, ls="--")
-        ax.text(thr, ax.get_ylim()[1] if ax.get_ylim()[1] > 1 else 1, f" threshold {thr:.3f}", fontsize=8,
+        ax.text(thr, ax.get_ylim()[1] if ax.get_ylim()[1] > 1 else 1, f" threshold {thr:.3f}", fontsize=11,
                 color=TEXT2, va="top")
         ax.set_yscale("log")
-        ax.set(title=f"Score distribution – {STAGE_NAME[st]}", xlabel="Score", ylabel="Processes (log)")
-        ax.legend(fontsize=8)
+        ax.set(title=STAGE_NAME[st], xlabel="Score", ylabel="Processes (log)")
+        ax.legend(fontsize=11, loc="center")
     axes[1].tick_params(labelleft=True)
     save(fig, fdir / "score_distributions.png")
 
@@ -180,19 +188,20 @@ def fig_scores(pred: pd.DataFrame, rep: dict, fdir: Path):
 def fig_confusion(rep: dict, fdir: Path):
     plt = plt_setup()
     stages = STAGE_ORDER
-    fig, axes = plt.subplots(1, len(stages), figsize=(3.0 * len(stages), 3.1))
-    for ax, st in zip(axes, stages):
+    plt.rcParams.update({"font.size": 12, "axes.titlesize": 12})
+    fig, axes = plt.subplots(2, 2, figsize=(8, 7.4))
+    for ax, st in zip(axes.ravel(), stages):
         m = rep["overall_test"][st]
         mat = np.array([[m["tn"], m["fp"]], [m["fn"], m["tp"]]])
         norm = mat / np.maximum(mat.sum(axis=1, keepdims=True), 1)
         ax.imshow(norm, cmap="Blues", vmin=0, vmax=1)
         for (i, j), v in np.ndenumerate(mat):
-            ax.text(j, i, f"{v:,}\n({norm[i, j]:.1%})", ha="center", va="center", fontsize=8,
+            ax.text(j, i, f"{v}\n({norm[i, j]:.1%})", ha="center", va="center", fontsize=13,
                     color=SURFACE if norm[i, j] > 0.55 else TEXT)
         ax.set_xticks([0, 1], ["Benign", "Malicious"]); ax.set_yticks([0, 1], ["Benign", "Malicious"])
         ax.set(xlabel="Predicted", ylabel="Actual", title=STAGE_NAME[st])
         ax.grid(False)
-    fig.suptitle("Confusion matrices on the test set (validation-calibrated thresholds)", fontsize=10)
+    fig.suptitle("Confusion matrices on the test set (validation-calibrated thresholds)", fontsize=12)
     save(fig, fdir / "confusion_matrices.png")
 
 
@@ -227,7 +236,7 @@ def fig_shap(rdir: Path, fdir: Path, tdir: Path):
     imp.to_csv(tdir / "shap_importance.csv", index=False)
     shap.summary_plot(z["values"], z["X"], feature_names=list(z["features"]), show=False,
                       max_display=15, plot_size=(8, 6))
-    fig = plt.gcf(); fig.suptitle("SHAP values, Stage 1 (XGBoost), test-set sample", fontsize=10)
+    fig = plt.gcf(); fig.suptitle("SHAP values, Stage 1 (XGBoost), test set", fontsize=10)
     save(fig, fdir / "shap_summary.png")
     top = imp.head(15).iloc[::-1]
     fig, ax = plt.subplots(figsize=(7, 5))
@@ -244,20 +253,22 @@ def fig_ttd(rdir: Path, fdir: Path, tdir: Path):
                                    median_ttd_s=("ttd_s", "median")).reset_index()
     summ.to_csv(tdir / "time_to_detection_summary.csv", index=False)
     plt = plt_setup()
-    fig, ax = plt.subplots(figsize=(7, 4))
+    plt.rcParams.update({"font.size": 12, "axes.titlesize": 12})
+    fig, ax = plt.subplots(figsize=(7, 4.2))
     for i, (kind, g) in enumerate(ttd.groupby("kind")):
         t = np.sort(g["ttd_s"].dropna().to_numpy())
         if not len(t):
             continue
         frac = np.arange(1, len(t) + 1) / len(g)
-        ax.step(np.r_[9.0, t, 11.0], np.r_[0, frac, frac[-1]], where="post", color=SERIES[i],
+        ax.step(np.r_[9.8, t, 11.0], np.r_[0, frac, frac[-1]], where="post", color=SERIES[i],
                 lw=2.4 - 0.4 * i, label=f"{TTD_NAME.get(kind, kind)} ({len(t)}/{len(g)} runs)")
     ax.axvline(10, color=TEXT2, lw=1, ls="--")
-    ax.text(9.95, 0.5, "shortest window (10 s):\nearliest possible detection", ha="right", fontsize=8, color=TEXT2)
-    ax.set(xlabel="Seconds from scenario start", ylabel="Share of malicious runs detected",
-           title="Time to detection (Stage 1, per-window models)", ylim=(0, 1.05), xlim=(9.0, 11.0))
-    ax.set_xticks(np.arange(9.0, 11.01, 0.25))
-    ax.legend(fontsize=8, loc="lower right")
+    ax.text(10.03, 0.45, "shortest window (10 s):\nearliest possible detection", ha="left", fontsize=10,
+            color=TEXT2)
+    ax.set(xlabel="Seconds from scenario start", ylabel="Cumulative share of runs detected",
+           title="Cumulative share of malicious runs detected", ylim=(0, 1.05), xlim=(9.8, 11.0))
+    ax.set_xticks(np.arange(9.8, 11.01, 0.2))
+    ax.legend(fontsize=10, loc="lower right")
     save(fig, fdir / "time_to_detection.png")
 
 
@@ -268,20 +279,21 @@ def fig_dataset(cfg: dict, runs: pd.DataFrame, fdir: Path):
     g = f.groupby(["kind", "scenario"])["label"].agg(malicious="sum", total="size").reset_index()
     g["benign"] = g["total"] - g["malicious"]
     g = g.sort_values(["kind", "scenario"], ascending=False)
-    fig, ax = plt.subplots(figsize=(8, 0.5 * len(g) + 1.6))
+    plt.rcParams.update({"font.size": 11, "axes.titlesize": 12})
+    fig, ax = plt.subplots(figsize=(9, 0.33 * len(g) + 1.4))
     yy = np.arange(len(g))
     h = 0.36
     ax.barh(yy + h / 2 + 0.01, g["benign"], height=h, color=SERIES[0], label="Benign processes")
     ax.barh(yy - h / 2 - 0.01, g["malicious"], height=h, color=SERIES[1], label="Malicious processes")
     for y, b, m in zip(yy, g["benign"], g["malicious"]):
-        ax.text(max(b, 1) * 1.08, y + h / 2, f"{b:,}", va="center", fontsize=7, color=TEXT2)
+        ax.text(max(b, 1) * 1.08, y + h / 2, f"{b:,}", va="center", fontsize=9, color=TEXT2)
         if m:
-            ax.text(m * 1.08, y - h / 2, f"{m:,}", va="center", fontsize=7, color=TEXT2)
+            ax.text(m * 1.08, y - h / 2, f"{m:,}", va="center", fontsize=9, color=TEXT2)
     ax.set_yticks(yy, [f"{s} ({k})" for s, k in zip(g["scenario"], g["kind"])])
     ax.set_xscale("log")
     ax.set_xlim(0.8, max(g["benign"].max(), 1) * 3)
     ax.set_xlabel("Processes (log scale)"); ax.set_title("Dataset composition by scenario")
-    ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.09), ncol=2)
+    ax.legend(fontsize=10, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=2)
     ax.grid(axis="y", visible=False)
     save(fig, fdir / "dataset_composition.png")
 
