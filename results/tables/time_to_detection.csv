@@ -1,0 +1,30 @@
+run_id,scenario,kind,family,holdout_family,detected,ttd_s
+sample_run_njrat_6917a5ed_20261122_112245,sample_run,sample,njrat,True,True,10.0
+sample_run_njrat_e96cfcc9_20261122_130800,sample_run,sample,njrat,True,True,10.0
+sample_run_LummaStealer_c3026c37_20261122_131937,sample_run,sample,LummaStealer,True,True,10.0
+sample_run_LummaStealer_1d4e0de3_20261122_134752,sample_run,sample,LummaStealer,True,True,10.0
+io_thrash_20261122_143812,io_thrash,simulator,,False,True,10.0
+sample_run_njrat_65278002_20261122_144024,sample_run,sample,njrat,True,True,10.0
+atomic_t1218_20261122_144311,atomic_t1218,atomic,,False,True,10.0
+atomic_t1055_20261122_144531,atomic_t1055,atomic,,False,True,10.0
+sample_run_LummaStealer_30a83653_20261122_144801,sample_run,sample,LummaStealer,True,True,10.0
+sample_run_LockBit_99b41a3f_20261122_145055,sample_run,sample,LockBit,False,True,10.0
+conn_flood_20261122_145348,conn_flood,simulator,,False,True,10.0
+sample_run_LockBit_34448978_20261122_145605,sample_run,sample,LockBit,False,True,10.0
+memory_hog_20261122_145855,memory_hog,simulator,,False,True,10.0
+thread_bomb_20261122_150114,thread_bomb,simulator,,False,True,10.0
+cpu_hog_20261122_150546,cpu_hog,simulator,,False,True,10.0
+atomic_t1055_20261122_150801,atomic_t1055,atomic,,False,True,10.185
+io_thrash_20261122_151033,io_thrash,simulator,,False,True,10.0
+sample_run_RemcosRAT_3943ced5_20261122_151248,sample_run,sample,RemcosRAT,False,True,10.632
+sample_run_XWorm_8b515b6e_20261122_151536,sample_run,sample,XWorm,False,True,10.0
+miner_like_20261122_151824,miner_like,simulator,,False,True,10.0
+sample_run_Formbook_cb0108fe_20261122_152051,sample_run,sample,Formbook,False,True,10.0
+file_churn_20261122_152335,file_churn,simulator,,False,True,10.0
+memory_hog_20261122_152545,memory_hog,simulator,,False,True,10.0
+atomic_t1059_20261122_152805,atomic_t1059,atomic,,False,True,10.0
+atomic_t1218_20261122_152958,atomic_t1218,atomic,,False,True,10.0
+conn_flood_20261122_153211,conn_flood,simulator,,False,True,10.0
+sample_run_SmokeLoader_7b41f5b9_20261122_153421,sample_run,sample,Smoke Loader,False,True,10.0
+sample_run_SmokeLoader_6f565b65_20261122_154525,sample_run,sample,Smoke Loader,False,True,10.0
+sample_run_XWorm_c4c84f59_20261122_154809,sample_run,sample,XWorm,False,True,10.0

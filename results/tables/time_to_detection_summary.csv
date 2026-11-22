@@ -1,0 +1,4 @@
+kind,runs,detected,median_ttd_s
+atomic,5,5,10.0
+sample,14,14,10.0
+simulator,10,10,10.0

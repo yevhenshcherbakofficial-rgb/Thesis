@@ -1,0 +1,13 @@
+split,kind,processes,malicious_processes
+test,atomic,300,188
+test,sample,396,33
+test,simulator,152,10
+test,workload,431,0
+train,atomic,464,291
+train,sample,483,61
+train,simulator,251,20
+train,workload,865,0
+val,atomic,15,6
+val,sample,84,26
+val,simulator,73,5
+val,workload,151,0

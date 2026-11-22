@@ -22,3 +22,6 @@ psutil>=5.9
 #   - Sysmon (with the sysmon-modular configuration)
 #   - Invoke-AtomicRedTeam (PowerShell module) for atomic_* scenarios
 # See docs/lab_setup.md.
+
+# Results package (results.py)
+matplotlib>=3.8

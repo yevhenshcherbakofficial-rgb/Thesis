@@ -1,0 +1,137 @@
+# Thesis_work configuration
+# Виявлення шкідливих процесів за допомогою штучного інтелекту
+# All modules read settings from this file (see load_config in collector.py).
+
+paths:
+  data_root: data            # root for all generated data (gitignored)
+  raw: data/raw              # exported EVTX, one subdir per run: data/raw/<run_id>/
+  events: data/events.parquet
+  features: data/features.parquet
+  sequences: data/sequences.pkl
+  models: data/models
+  reports: data/reports
+
+# ---------------------------------------------------------------------------
+# Virtual laboratory (consumed by lab.py)
+# ---------------------------------------------------------------------------
+lab:
+  vm_name: "win11-detect"           # VirtualBox VM name
+  snapshot: "clean"                 # snapshot restored before every run
+  guest_user: "analyst"
+  guest_password: "analyst"         # lab-only throwaway credentials
+  guest_python: "C:\\Python311\\python.exe"
+  guest_workdir: "C:\\lab"          # where scenarios.py is copied in the guest
+  guest_log: "C:\\Windows\\System32\\winevt\\Logs\\Microsoft-Windows-Sysmon%4Operational.evtx"
+  boot_timeout_s: 240               # max wait for logon + working guestcontrol after start
+  idle_wait_s: 60                   # idle period after logon, then the Sysmon log is cleared
+  settle_wait_s: 5                  # seconds to wait after scenario before log export
+  vboxmanage: "VBoxManage"          # path/command for the VBoxManage binary
+  internal_network: "labnet"        # runs are refused unless VMs are attached only here
+  sysmon_log_max_mb: 1024          # Sysmon channel size limit set before each run (default 64 MB overwrites)
+  sink_vm: "lab-sink"               # sink VM at sandbox.sink_host (DNS + catch-all TCP)
+  sink_user: "sink"
+  sink_password: "sink"             # lab-only throwaway credentials
+
+# ---------------------------------------------------------------------------
+# Feature formation (consumed by features.py)
+# ---------------------------------------------------------------------------
+features:
+  windows_s: [10, 30]               # observation windows after process start, seconds
+  sequence_max_len: 200             # max events per process sequence (LSTM)
+  sequence_pad: "post"              # pad/truncate side
+  autorun_registry_keys:            # substrings flagged as persistence writes
+    - "\\CurrentVersion\\Run"
+    - "\\CurrentVersion\\RunOnce"
+    - "\\Services\\"
+    - "\\Winlogon\\"
+  sensitive_apis:                   # injection-related API names (from ETW if available)
+    - "VirtualAllocEx"
+    - "WriteProcessMemory"
+    - "CreateRemoteThread"
+    - "OpenProcess"
+
+# ---------------------------------------------------------------------------
+# Models (consumed by models.py)
+# ---------------------------------------------------------------------------
+models:
+  split_time_quantile: 0.7          # runs: earliest 70% by time -> train(+val), latest 30% -> test
+  validation_share: 0.15            # last 15% of train runs -> validation (thresholds)
+  random_state: 42
+  feature_window_s: 30              # which window to use for the tabular stage
+  # feature sets for ablation (python models.py --feature-set <name>): features EXCLUDED
+  feature_sets:
+    full: []
+    # process-tree position/parent type: in this lab benign workloads are shallow by
+    # construction, so these features partly encode the scenario launch structure
+    no_tree_context: [depth, parent_is_shell, parent_is_lolbin, parent_is_office]
+  gbm:
+    n_estimators: 400
+    max_depth: 6
+    learning_rate: 0.05
+    subsample: 0.8
+    colsample_bytree: 0.8
+  lstm:
+    embedding_dim: 32
+    hidden_dim: 64
+    num_layers: 1
+    dropout: 0.2
+    epochs: 15
+    batch_size: 128
+    lr: 0.001
+  isolation_forest:
+    n_estimators: 200
+    contamination: "auto"
+  fusion:
+    stage1_suspect_threshold: 0.30  # processes above this go to stage 2
+    alert_threshold: 0.50           # used only by detect.py if no calibrated thresholds exist
+    anomaly_weight: 0.3             # anomaly score can raise a process to at most this
+    target_fpr: 0.001               # recall is reported at this FPR
+
+# ---------------------------------------------------------------------------
+# Scenarios (consumed by scenarios.py and lab.py)
+# label: benign | malicious
+# kind:  workload | simulator | atomic | sample
+# ---------------------------------------------------------------------------
+scenarios:
+  # --- benign workloads ---
+  - {name: office_edit,     label: benign,    kind: workload,  entry: office_workload,     duration_s: 60}
+  - {name: web_browse,      label: benign,    kind: workload,  entry: browser_workload,    duration_s: 60}
+  - {name: dev_build,       label: benign,    kind: workload,  entry: dev_workload,        duration_s: 90}
+  - {name: admin_ps,        label: benign,    kind: workload,  entry: admin_powershell,    duration_s: 45}
+  - {name: installer,       label: benign,    kind: workload,  entry: installer_workload,  duration_s: 60}
+
+  # --- behavioral simulators (resource / IO / network load generators) ---
+  - {name: cpu_hog,         label: malicious, kind: simulator, entry: cpu_hog,         duration_s: 30, attack: "resource-exhaustion"}
+  - {name: memory_hog,      label: malicious, kind: simulator, entry: memory_hog,      duration_s: 30, attack: "resource-exhaustion"}
+  - {name: io_thrash,       label: malicious, kind: simulator, entry: io_thrash,       duration_s: 30, attack: "disk-dos"}
+  - {name: thread_bomb,     label: malicious, kind: simulator, entry: thread_bomb,     duration_s: 20, attack: "resource-exhaustion"}
+  - {name: file_churn,      label: malicious, kind: simulator, entry: file_churn,      duration_s: 30, attack: "ransomware-io"}
+  - {name: conn_flood,      label: malicious, kind: simulator, entry: connection_flood, duration_s: 30, attack: "scanning"}
+  - {name: miner_like,      label: malicious, kind: simulator, entry: miner_like,      duration_s: 40, attack: "cryptomining"}
+
+  # --- external attack emulation (launchers only; tooling installed in guest) ---
+  - {name: atomic_t1055,    label: malicious, kind: atomic,    technique: "T1055", duration_s: 90}
+  - {name: atomic_t1059,    label: malicious, kind: atomic,    technique: "T1059", duration_s: 90}
+  - {name: atomic_t1218,    label: malicious, kind: atomic,    technique: "T1218", duration_s: 90}
+
+  # --- documented real samples (path supplied at run time; see real_samples README) ---
+  - {name: sample_run,      label: malicious, kind: sample,    duration_s: 60}
+
+# Real malware samples (samples.py). Stored OUTSIDE the repository as the
+# encrypted ZIPs MalwareBazaar serves (password "infected"); never extracted on
+# the host. The Auth-Key file is never printed or committed.
+samples:
+  dir: "../../samples"
+  auth_key_file: "../../abuse_ch_auth_key.txt"
+  zip_password: "infected"
+  per_family: 3
+  max_size_mb: 8
+  families: [AgentTesla, Formbook, RemcosRAT, AsyncRAT, XWorm, LummaStealer,
+             RedLineStealer, njrat, "Smoke Loader", Phobos, LockBit]
+  holdout_families: [LummaStealer, njrat]   # unseen families: test only (all 3 samples active)
+
+# Simulator sandbox: all file/network simulators are confined to these targets.
+sandbox:
+  file_dir: "C:\\lab\\sandbox"      # file_churn / io_thrash operate ONLY here
+  sink_host: "10.0.0.2"             # conn_flood / miner_like beacon target (internal sink VM)
+  sink_port: 9000
