@@ -1,0 +1,17 @@
+kind,scenario,runs,seed_resolved,events,processes,malicious_processes
+atomic,atomic_t1055,5,5,33802,773,215
+atomic,atomic_t1059,5,5,4443,185,35
+atomic,atomic_t1218,5,5,27236,694,250
+sample,sample_run,32,32,190238,2692,152
+simulator,conn_flood,5,5,10509,211,5
+simulator,cpu_hog,5,5,5976,215,5
+simulator,file_churn,5,5,276892,212,5
+simulator,io_thrash,5,5,50184,209,5
+simulator,memory_hog,5,5,6732,231,5
+simulator,miner_like,5,5,7835,287,5
+simulator,thread_bomb,5,5,2805,150,5
+workload,admin_ps,5,5,12375,384,0
+workload,dev_build,5,5,19894,825,0
+workload,installer,5,5,15740,356,0
+workload,office_edit,5,5,15297,626,0
+workload,web_browse,5,5,16555,437,0

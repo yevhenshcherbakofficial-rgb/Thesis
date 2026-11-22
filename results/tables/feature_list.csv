@@ -1,0 +1,46 @@
+feature,group
+image_is_lolbin,Static attributes
+image_is_shell,Static attributes
+cmdline_len,Launch context
+cmdline_entropy,Launch context
+cmdline_n_args,Launch context
+parent_is_shell,Launch context
+parent_is_office,Launch context
+parent_is_lolbin,Launch context
+integrity_rank,Launch context
+depth,Launch context
+cpu_max_pct,Resource metrics
+cpu_mean_pct,Resource metrics
+cpu_total_s,Resource metrics
+ws_max_mb,Resource metrics
+ws_growth_mb,Resource metrics
+private_max_mb,Resource metrics
+threads_max,Resource metrics
+threads_growth,Resource metrics
+handles_max,Resource metrics
+res_samples,Resource metrics
+n_events,Resource metrics
+event_rate,Resource metrics
+n_img_load,Resource metrics
+n_unsigned_load,Resource metrics
+terminated_in_window,Resource metrics
+lifetime_in_window_s,Resource metrics
+n_file_create,File and registry activity
+n_exec_file_create,File and registry activity
+n_unique_file_ext,File and registry activity
+n_file_delete,File and registry activity
+n_autorun_writes,File and registry activity
+n_reg_set,File and registry activity
+n_reg_key_op,File and registry activity
+n_net,Network activity
+n_unique_ip,Network activity
+n_unique_port,Network activity
+n_dns,Network activity
+n_unique_domain,Network activity
+n_children,Inter-process interaction
+remote_thread_out,Inter-process interaction
+process_access_out,Inter-process interaction
+n_high_access_out,Inter-process interaction
+n_access_targets,Inter-process interaction
+lsass_access,Inter-process interaction
+is_injected,Inter-process interaction
