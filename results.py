@@ -151,7 +151,7 @@ def fig_roc_pr(pred: pd.DataFrame, rep: dict, fdir: Path):
         axes[1].plot(r, p, color=SERIES[i], ls=ls, lw=lw)
     axes[0].set_xscale("log"); axes[0].set_xlim(1e-4, 1)
     axes[0].axvline(rep["target_fpr"], color=TEXT2, lw=1, ls="--")
-    axes[0].text(rep["target_fpr"] * 1.15, 0.5, f"target FPR\n{rep['target_fpr']:g}", color=TEXT2, fontsize=11)
+    axes[0].text(rep["target_fpr"] * 1.15, 0.75, f"target FPR\n{rep['target_fpr']:g}", color=TEXT2, fontsize=11)
     axes[0].set(title="ROC curve (log FPR)", xlabel="False positive rate", ylabel="True positive rate")
     axes[1].set(title="Precision-recall curve", xlabel="Recall", ylabel="Precision")
     for ax in axes:
@@ -176,11 +176,11 @@ def fig_scores(pred: pd.DataFrame, rep: dict, fdir: Path):
                 edgecolor=SURFACE, linewidth=0.5)
         thr = rep["thresholds_from_validation"][st]
         ax.axvline(thr, color=TEXT, lw=1, ls="--")
-        ax.text(thr, ax.get_ylim()[1] if ax.get_ylim()[1] > 1 else 1, f" threshold {thr:.3f}", fontsize=11,
+        ax.text(thr, 300, f" threshold {thr:.3f}", fontsize=11,
                 color=TEXT2, va="top")
         ax.set_yscale("log")
         ax.set(title=STAGE_NAME[st], xlabel="Score", ylabel="Processes (log)")
-        ax.legend(fontsize=11, loc="center")
+        ax.legend(fontsize=11, loc="center right", bbox_to_anchor=(0.9, 0.45))
     axes[1].tick_params(labelleft=True)
     save(fig, fdir / "score_distributions.png")
 
